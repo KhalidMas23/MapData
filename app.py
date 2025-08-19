@@ -330,114 +330,83 @@ if not categories:
 
 # ---------------------------- sidebar selection ----------------------------
 with st.sidebar:
-    st.header("Overlap")
-    st.caption("Compare two layers (can be from different categories/files).")
+    st.header("Browse")
+    # ensure we always define these for the main view
+    _browse_ok = True
 
-    # --- Left (A) selection ---
-    st.subheader("Layer A")
-    catA = st.selectbox("Category A", categories, key="catA")
+    try:
+        category = st.selectbox("Category", categories, key="browse_cat")
+        cat_path = os.path.join(DATA_DIR, category)
+
+        gpkg_files = list_gpkg_files(cat_path)
+        if not gpkg_files:
+            st.warning(f"No .gpkg files in {cat_path}")
+            _browse_ok = False
+        else:
+            file_choice = st.selectbox("GeoPackage file", gpkg_files, key="browse_file")
+            file_path = os.path.join(cat_path, file_choice)
+
+            layers_df, layer_names, name_to_index = normalize_layers(raw_list_layers(file_path))
+            layer = st.selectbox("Layer", layer_names, key="browse_layer")
+    except Exception as _e:
+        _browse_ok = False
+        st.error(f"Browse panel failed: {_e}")
+
+    st.divider()
+    st.header("Overlap")
+    st.caption("Compare two layers (can be from different files).")
+
+    # --- A selection ---
+    catA = st.selectbox("Category A", categories, key="ov_catA")
     pathA = os.path.join(DATA_DIR, catA)
     filesA = list_gpkg_files(pathA)
-    fileA = st.selectbox("File A", filesA, key="fileA")
+    fileA = st.selectbox("File A", filesA, key="ov_fileA")
     fpathA = os.path.join(pathA, fileA)
     layers_dfA, layer_namesA, name_to_indexA = normalize_layers(raw_list_layers(fpathA))
-    layerA = st.selectbox("Layer A", layer_namesA, key="layerA")
+    layerA = st.selectbox("Layer A", layer_namesA, key="ov_layerA")
 
-    # --- Right (B) selection ---
-    st.subheader("Layer B")
-    catB = st.selectbox("Category B", categories, key="catB")
+    # --- B selection ---
+    catB = st.selectbox("Category B", categories, key="ov_catB")
     pathB = os.path.join(DATA_DIR, catB)
     filesB = list_gpkg_files(pathB)
-    fileB = st.selectbox("File B", filesB, key="fileB")
+    fileB = st.selectbox("File B", filesB, key="ov_fileB")
     fpathB = os.path.join(pathB, fileB)
     layers_dfB, layer_namesB, name_to_indexB = normalize_layers(raw_list_layers(fpathB))
-    layerB = st.selectbox("Layer B", layer_namesB, key="layerB")
+    layerB = st.selectbox("Layer B", layer_namesB, key="ov_layerB")
 
-    # overlap mode
     mode = st.selectbox(
         "Overlap mode",
         ["polygon-polygon", "point-in-polygon", "line-polygon", "intersects", "point-near-point"],
-        help=(
-            "Choose based on geometry types:\n"
-            "- polygon-polygon: overlapping area\n"
-            "- point-in-polygon: A points within B polygons\n"
-            "- line-polygon: A lines clipped to B polygons\n"
-            "- intersects: generic spatial join\n"
-            "- point-near-point: A points within distance of B points"
-        ),
+        key="ov_mode",
     )
-    distance_m = None
-    if mode == "point-near-point":
-        distance_m = st.number_input("Distance (meters)", min_value=1.0, value=250.0, step=50.0)
-
-    run_overlap = st.button("Compute overlap")
+    distance_m = st.number_input("Distance (meters)", min_value=1.0, value=250.0, step=50.0, key="ov_dist") \
+        if mode == "point-near-point" else None
+    run_overlap = st.button("Compute overlap", key="ov_run")
 
 
 # ---------------------------- main ----------------------------
-st.subheader(f"File: {file_choice}")
-st.caption(f"Path: `{os.path.join(category, file_choice)}` — Layer: `{layer}`")
+# ---------------------------- main (browse) ----------------------------
+if _browse_ok:
+    st.subheader(f"File: {file_choice}")
+    st.caption(f"Path: `{os.path.join(category, file_choice)}` — Layer: `{layer}`")
 
-with st.expander("Layer metadata", expanded=False):
-    st.dataframe(layers_df)
+    with st.expander("Layer metadata", expanded=False):
+        st.dataframe(layers_df)
 
-# Resolve selection context
-layer_index = name_to_index.get(layer, 0)
-layer_row = layers_df.loc[layers_df["name"] == layer].iloc[0] if layer in layers_df["name"].values else None
-is_spatial = bool(layer_row["is_spatial"]) if layer_row is not None else True
+    layer_index = name_to_index.get(layer, 0)
+    layer_row = layers_df.loc[layers_df["name"] == layer].iloc[0] if layer in layers_df["name"].values else None
+    is_spatial = bool(layer_row["is_spatial"]) if layer_row is not None else True
 
-# Read + heal (if spatial)
-gdf = read_layer(file_path, layer, layer_index, is_spatial)
-if is_spatial and isinstance(gdf, gpd.GeoDataFrame):
-    gdf = heal_geometries(gdf)
+    gdf = read_layer(file_path, layer, layer_index, is_spatial)
+    if is_spatial and isinstance(gdf, gpd.GeoDataFrame):
+        gdf = heal_geometries(gdf)
 
-# Info + preview + map
-if isinstance(gdf, gpd.GeoDataFrame):
-    st.write(f"CRS: **{gdf.crs}**")
-st.write(f"Rows: **{len(gdf)}** | Columns: **{len(gdf.columns)}**")
+    if isinstance(gdf, gpd.GeoDataFrame):
+        st.write(f"CRS: **{gdf.crs}**")
+    st.write(f"Rows: **{len(gdf)}** | Columns: **{len(gdf.columns)}**")
 
-arrow_safe_preview(gdf, n=200)
-if isinstance(gdf, gpd.GeoDataFrame):
+    arrow_safe_preview(gdf, n=200)
+    # use your pydeck renderer
     map_geoms(gdf)
-
-st.markdown(
-    """
-**Notes**
-- Expects data in `data/contamination`, `data/demographic`, `data/environmental`, `data/stress`.
-- Non-spatial layers (tables) show as grids only; point layers show a quick map.
-- For polygons/lines or richer styling, open the GeoPackage in QGIS.
-"""
-)
-
-if run_overlap:
-    # Resolve indices & spatial flags
-    idxA = name_to_indexA.get(layerA, 0)
-    rowA = layers_dfA.loc[layers_dfA["name"] == layerA].iloc[0]
-    spatialA = bool(rowA["is_spatial"])
-
-    idxB = name_to_indexB.get(layerB, 0)
-    rowB = layers_dfB.loc[layers_dfB["name"] == layerB].iloc[0]
-    spatialB = bool(rowB["is_spatial"])
-
-    if not spatialA and mode != "point-near-point":
-        st.error("Layer A is non-spatial. Choose a spatial layer (or use point-near-point if A is points).")
-    elif not spatialB and mode not in ("intersects",):
-        st.error("Layer B is non-spatial. Choose a spatial layer or use a generic intersects join.")
-    else:
-        with st.spinner("Computing overlap…"):
-            gdfA = load_layer(fpathA, layerA, idxA, spatialA)
-            gdfB = load_layer(fpathB, layerB, idxB, spatialB)
-
-            # Ensure we have GeoDataFrames (sjoin/overlay require geometry)
-            if mode != "point-near-point" and (getattr(gdfA, "geometry", None) is None or getattr(gdfB, "geometry", None) is None):
-                st.error("At least one of the layers is non-spatial; try a different mode.")
-            else:
-                result = compute_overlap(gdfA, gdfB, mode=mode, distance_m=distance_m)
-                stats = summarize_overlap(result)
-
-        st.success("Overlap computed.")
-        st.write("**Stats:**", stats)
-        arrow_safe_preview(result, n=200)
-        if isinstance(result, gpd.GeoDataFrame):
-            # Use your new pydeck map function
-            map_geoms(result)
-        download_buttons(result, label_prefix=f"overlap_{layerA}_vs_{layerB}")
+else:
+    st.info("Use the **Browse** panel to pick a file/layer.")
